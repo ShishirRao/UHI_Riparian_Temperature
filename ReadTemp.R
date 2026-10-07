@@ -13,27 +13,27 @@ library(lubridate)
 setwd("E:/Shishir/postdoc/Data")
 
 #read the site level meta data for temperature loggers
-sites <- read.csv("sites_v02.csv",header=T)
+sites <- read.csv("Temperature/sites_v02.csv",header=T)
 
 #Create a shape file using the lat, long of logger locations
-site_loc=  st_as_sf(sites, coords = c("logger_lon","logger_lat"),crs = 4326)
+site_loc <-  st_as_sf(sites, coords = c("logger_lon","logger_lat"),crs = 4326)
 
 #Get Texas stream network and wshed
-Tex_stream = st_read("rmrs-flowline_tx12_nsi/Flowline_TX12_NSI.shp")
+Tex_stream<-st_read("Stream/rmrs-flowline_tx12_nsi/Flowline_TX12_NSI.shp")
 
 #Get watershed polygons at different HUC levels
-Tex_wshed_HUC8 = st_read("NHD_H_Texas_State_Shape/Shape/WBDHU8.shp")
-Tex_wshed_HUC6 = st_read("NHD_H_Texas_State_Shape/Shape/WBDHU6.shp")
-Tex_wshed_HUC4 = st_read("NHD_H_Texas_State_Shape/Shape/WBDHU4.shp")
+Tex_wshed_HUC8 <- st_read("Watershed/NHD_H_Texas_State_Shape/Shape/WBDHU8.shp")
+Tex_wshed_HUC6 <- st_read("Watershed/NHD_H_Texas_State_Shape/Shape/WBDHU6.shp")
+Tex_wshed_HUC4 <- st_read("Watershed/NHD_H_Texas_State_Shape/Shape/WBDHU4.shp")
 
 #HUC 6 seems like the correct resolution. Clip it to San Antonio watershed
-SA_wshed = Tex_wshed_HUC6 %>% filter(name == "San Antonio" | name == "Guadalupe")
+SA_wshed <- Tex_wshed_HUC6 %>% filter(name == "San Antonio" | name == "Guadalupe")
 
 # transform the logger locations to the same CRS as that of the watershed and
 # then Select loggers within the San Antonio watershed
 st_crs(SA_wshed) # this is in EPSG 4269
 site_loc <- st_transform(site_loc, st_crs(SA_wshed))
-SA_loggers = st_filter(site_loc, SA_wshed, .predicate = st_intersects)
+SA_loggers <- st_filter(site_loc, SA_wshed, .predicate = st_intersects)
 
 #Clip the stream network to San Antonio watershed
 Tex_stream <- st_transform(Tex_stream,st_crs(SA_wshed))
@@ -56,7 +56,7 @@ ggplot() +
 SA_temp_files <- SA_loggers %>% st_drop_geometry() %>% pull(FileName) %>% paste0(".csv")
 
 # Set the folder path where all the temp records are stored
-folder_path <- "E:/Shishir/postdoc/Data/data_field_loggers_temp_v01"
+folder_path <- "E:/Shishir/postdoc/Data/Temperature/data_field_loggers_temp"
 
 # Build full file paths
 full_paths <- file.path(folder_path, SA_temp_files)
@@ -72,32 +72,47 @@ missing_filenames <- basename(missing_paths)
 names(existing_paths) <- sub("\\.csv$", "", basename(existing_paths))
 
 # Reading the first 3 files to check if it works.
-temp_data = existing_paths[1:3] %>%
-  map_df(~read_csv(.x), .id = "FileName")
+#temp_data = existing_paths[1:3] %>%
+#  map_df(~read_csv(.x), .id = "FileName")
 
-names(temp_data)
+#names(temp_data)
 
 #The files are supposed to have two columns named date_time and tempC but the column names differ
 #between the files. So, standardize the file names
 read_and_standardize <- function(file_path) {
-  # Read the data frame
-  df <- read_csv(file_path, show_col_types = FALSE)
 
-  # Clean names to a standard format "Date Time" becomes "date_time"
-  df <- janitor::clean_names(df)
+  # Some temperature files are missing column headers
+  first_line <- read_lines(file_path, n_max = 1)
 
-  # Dynamic Column Renaming based on keyword matching (grep style)
-  df <- df %>%
-    rename(
-      # Find whichever column contains "date" or "time" and name it "date_time"
-      date_time = matches("date|time"),
-      # Find whichever column contains "temp" or "deg" and name it "tempC"
-      tempC = matches("temp|deg")
-    ) %>% select(date_time, tempC) %>%
+  # check if it has the standard headers
+  has_headers <- any(grepl("date|time|temp|deg", first_line, ignore.case = TRUE))
+
+  if(has_headers){
+    # Read the data frame
+    df <- read_csv(file_path, show_col_types = FALSE)
+
+    # Clean names to a standard format "Date Time" becomes "date_time"
+    df <- janitor::clean_names(df)
+
+    df <- df %>%
+      rename(
+        # Find whichever column contains "date" or "time" and name it "date_time"
+        date_time = matches("date|time"),
+        # Find whichever column contains "temp" or "deg" and name it "tempC"
+        tempC = matches("temp|deg")
+      )
+  }else { #column headers are missing
+    # add headers manually
+    df <- read_csv(file_path, col_names = c("date_time", "tempC"), show_col_types = FALSE)
+  }
+
+  # Column Renaming based on keyword matching (grep style)
+   df <- df %>% select(date_time, tempC) %>%
     mutate(
       # convert date_time to text first so lubridate can parse it consistently
       date_time = as.character(date_time),
-      date_time = parse_date_time(date_time, orders = c("mdy IMS p", "ymd HMS"))
+      date_time = parse_date_time(date_time, orders = c("mdy IMS p", "ymd HMS")),
+      tempC = as.numeric(tempC)
     )
   return(df)
 }
@@ -106,4 +121,6 @@ read_and_standardize <- function(file_path) {
 temp_data = existing_paths %>%
   map_df(~read_and_standardize(.x), .id = "FileName")
 
+#make sure all files are read
+length(unique(temp_data$FileName))
 
