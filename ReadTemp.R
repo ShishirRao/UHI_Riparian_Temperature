@@ -8,9 +8,13 @@ library(purrr)
 library(readr)
 library(janitor)
 library(lubridate)
+library(dataRetrieval)
+library(httr2)
 
 # Set path
 setwd("E:/Shishir/postdoc/Data")
+
+##### Reading temperature logger data from upper San Antonio watershed ####
 
 #read the site level meta data for temperature loggers
 sites <- read.csv("Temperature/sites_v02.csv",header=T)
@@ -81,6 +85,7 @@ names(existing_paths) <- sub("\\.csv$", "", basename(existing_paths))
 #between the files. So, standardize the file names
 read_and_standardize <- function(file_path) {
 
+  #file_path = "E:/Shishir/postdoc/Data/Temperature/data_field_loggers_temp/ID10862160_V2_Honey30A_2024_11_11.csv"
   # Some temperature files are missing column headers
   first_line <- read_lines(file_path, n_max = 1)
 
@@ -111,16 +116,162 @@ read_and_standardize <- function(file_path) {
     mutate(
       # convert date_time to text first so lubridate can parse it consistently
       date_time = as.character(date_time),
-      date_time = parse_date_time(date_time, orders = c("mdy IMS p", "ymd HMS")),
+      date_time = parse_date_time(date_time, orders = c(
+                                                          "%m/%d/%Y %I:%M:%S %p",
+                                                          "%m/%d/%y %I:%M:%S %p",
+                                                          "%Y-%m-%d %H:%M:%S",
+                                                          "%m/%d/%Y %H:%M:%S",
+                                                          "%m/%d/%Y %H:%M",
+                                                          "%Y-%m-%d %H:%M"
+                                                        )),
       tempC = as.numeric(tempC)
     )
   return(df)
 }
 
-# read again. The column names are changed but the date time format varies across files. So rbind won't work
+
+date_time =  as.character(df$date_time)
+#date_time =  parse_date_time(date_time, orders = c("mdy IMS p", "ymd HMS","%m/%d/%Y %H:%M"))
+date_time =  parse_date_time(date_time, orders = c(
+  "%m/%d/%Y %I:%M:%S %p",
+  "%m/%d/%y %I:%M:%S %p",
+  "%Y-%m-%d %H:%M:%S",
+  "%m/%d/%Y %H:%M:%S",
+  "%m/%d/%Y %H:%M",
+  "%Y-%m-%d %H:%M"
+))
+head(date_time)
+parse_date_time(as.character("5/10/2023  9:00:00 AM"),orders = c(
+                                                                    "%m/%d/%Y %I:%M:%S %p",
+                                                                    "%Y-%m-%d %H:%M:%S",
+                                                                    "%m/%d/%Y %H:%M:%S",
+                                                                    "%m/%d/%Y %H:%M",
+                                                                    "%Y-%m-%d %H:%M"
+                                                                  ))
+
+# read data and combine row-wise
 temp_data = existing_paths %>%
   map_df(~read_and_standardize(.x), .id = "FileName")
 
 #make sure all files are read
 length(unique(temp_data$FileName))
 
+
+###### Read related USGS gauges #####
+
+###### perform quality checks on different sites' temperature data before generating indices #####
+
+# Step 1: Determine the sampling interval for each logger
+# Use the most common interval between consecutive timestamps
+
+logger_intervals <- temp_data %>%
+  filter(!is.na(date_time)) %>%
+  distinct(FileName, date_time) %>%
+  arrange(FileName, date_time) %>%
+  group_by(FileName) %>%
+  mutate(
+    interval_min = as.numeric(
+      difftime(date_time, lag(date_time), units = "mins")
+    )
+  ) %>%
+  filter(!is.na(interval_min), interval_min > 0) %>%
+  count(FileName, interval_min, name = "frequency") %>%
+  arrange(FileName, desc(frequency), interval_min) %>%
+  group_by(FileName) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(FileName, sampling_interval_min = interval_min)
+
+# Step 2: Calculate observations per day
+daily_counts <- temp_data %>%
+  filter(!is.na(date_time)) %>%
+  mutate(date = as.Date(date_time)) %>%
+  group_by(FileName, date) %>%
+  summarise(
+    n_obs_day = sum(!is.na(tempC)),
+    .groups = "drop"
+  )
+
+# Step 3: Create site-level quality-control summary
+
+temp_QC <- temp_data %>%
+  group_by(FileName) %>%
+  summarise(
+    start_date = if (all(is.na(date_time))) as.POSIXct(NA)
+    else min(date_time, na.rm = TRUE),
+
+    end_date = if (all(is.na(date_time))) as.POSIXct(NA)
+    else max(date_time, na.rm = TRUE),
+
+    start_year = if (all(is.na(date_time))) NA_integer_
+    else year(min(date_time, na.rm = TRUE)),
+
+    end_year = if (all(is.na(date_time))) NA_integer_
+    else year(max(date_time, na.rm = TRUE)),
+
+    years_with_data = n_distinct(
+      year(date_time[!is.na(date_time) & !is.na(tempC)])
+    ),
+
+    n_records = n(),
+
+    n_obs = sum(!is.na(tempC) & !is.na(date_time)),
+
+    missing_temp = sum(is.na(tempC)),
+
+    missing_datetime = sum(is.na(date_time)),
+
+    duplicate_timestamps = sum(
+      duplicated(date_time) & !is.na(date_time)
+    ),
+
+    min_temp = if (all(is.na(tempC))) NA_real_
+    else min(tempC, na.rm = TRUE),
+
+    max_temp = if (all(is.na(tempC))) NA_real_
+    else max(tempC, na.rm = TRUE),
+
+    .groups = "drop"
+  ) %>%
+  mutate(
+    years_spanned = end_year - start_year + 1,
+
+    days_spanned = as.numeric(
+      as.Date(end_date) - as.Date(start_date)
+    ) + 1
+  ) %>%
+  left_join(logger_intervals, by = "FileName") %>%
+  left_join(
+    daily_counts %>%
+      group_by(FileName) %>%
+      summarise(
+        days_with_data = sum(n_obs_day > 0),
+        median_obs_per_day = median(n_obs_day),
+        min_obs_per_day = min(n_obs_day),
+        max_obs_per_day = max(n_obs_day),
+        .groups = "drop"
+      ),
+    by = "FileName"
+  ) %>%
+  mutate(
+    expected_obs = as.numeric(
+      difftime(end_date, start_date, units = "mins")
+    ) / sampling_interval_min + 1,
+
+    completeness_pct = round(
+      100 * n_obs / expected_obs, 1
+    ),
+
+    days_completeness_pct = round(
+      100 * days_with_data / days_spanned, 1
+    )
+  )
+
+View(temp_QC)
+
+temp_data %>%
+  filter(is.na(date_time)) %>%
+  count(FileName) %>%
+  arrange(desc(n))
+
+#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v1.csv")
