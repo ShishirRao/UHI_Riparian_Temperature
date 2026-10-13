@@ -85,7 +85,7 @@ names(existing_paths) <- sub("\\.csv$", "", basename(existing_paths))
 #between the files. So, standardize the file names
 read_and_standardize <- function(file_path) {
 
-  #file_path = "E:/Shishir/postdoc/Data/Temperature/data_field_loggers_temp/ID10862160_V2_Honey30A_2024_11_11.csv"
+  #file_path = "E:/Shishir/postdoc/Data/Temperature/data_field_loggers_temp/ID20880806_V2_CiboloPreserveUp_2022_07_28.csv"
   # Some temperature files are missing column headers
   first_line <- read_lines(file_path, n_max = 1)
 
@@ -122,32 +122,15 @@ read_and_standardize <- function(file_path) {
                                                           "%Y-%m-%d %H:%M:%S",
                                                           "%m/%d/%Y %H:%M:%S",
                                                           "%m/%d/%Y %H:%M",
-                                                          "%Y-%m-%d %H:%M"
+                                                          "%Y-%m-%d %H:%M",
+                                                          "%Y-%m-%d",              # Date only for midnight
+                                                          "%m/%d/%Y",
+                                                          "%m/%d/%y"
                                                         )),
       tempC = as.numeric(tempC)
     )
   return(df)
 }
-
-
-date_time =  as.character(df$date_time)
-#date_time =  parse_date_time(date_time, orders = c("mdy IMS p", "ymd HMS","%m/%d/%Y %H:%M"))
-date_time =  parse_date_time(date_time, orders = c(
-  "%m/%d/%Y %I:%M:%S %p",
-  "%m/%d/%y %I:%M:%S %p",
-  "%Y-%m-%d %H:%M:%S",
-  "%m/%d/%Y %H:%M:%S",
-  "%m/%d/%Y %H:%M",
-  "%Y-%m-%d %H:%M"
-))
-head(date_time)
-parse_date_time(as.character("5/10/2023  9:00:00 AM"),orders = c(
-                                                                    "%m/%d/%Y %I:%M:%S %p",
-                                                                    "%Y-%m-%d %H:%M:%S",
-                                                                    "%m/%d/%Y %H:%M:%S",
-                                                                    "%m/%d/%Y %H:%M",
-                                                                    "%Y-%m-%d %H:%M"
-                                                                  ))
 
 # read data and combine row-wise
 temp_data = existing_paths %>%
@@ -269,9 +252,9 @@ temp_QC <- temp_data %>%
 
 View(temp_QC)
 
-temp_data %>%
+missing_datetime = temp_data %>%
   filter(is.na(date_time)) %>%
   count(FileName) %>%
   arrange(desc(n))
 
-#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v1.csv")
+write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v2.csv")
