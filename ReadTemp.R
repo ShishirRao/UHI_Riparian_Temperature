@@ -85,16 +85,18 @@ names(existing_paths) <- sub("\\.csv$", "", basename(existing_paths))
 #between the files. So, standardize the file names
 read_and_standardize <- function(file_path) {
 
-  #file_path = "E:/Shishir/postdoc/Data/Temperature/data_field_loggers_temp/ID20880806_V2_CiboloPreserveUp_2022_07_28.csv"
-  # Some temperature files are missing column headers
+  # Some temperature files are missing column headers. Check if it has the standard headers
   first_line <- read_lines(file_path, n_max = 1)
+  has_headers <- any(grepl("date|time|temp", first_line, ignore.case = TRUE))
 
-  # check if it has the standard headers
-  has_headers <- any(grepl("date|time|temp|deg", first_line, ignore.case = TRUE))
+
 
   if(has_headers){
     # Read the data frame
     df <- read_csv(file_path, show_col_types = FALSE)
+
+    # check if the temperature is in Farenheit and set a flag
+    is_fahrenheit <- any(grepl("°F", names(df), ignore.case = TRUE))
 
     # Clean names to a standard format "Date Time" becomes "date_time"
     df <- janitor::clean_names(df)
@@ -103,15 +105,24 @@ read_and_standardize <- function(file_path) {
       rename(
         # Find whichever column contains "date" or "time" and name it "date_time"
         date_time = matches("date|time"),
-        # Find whichever column contains "temp" or "deg" and name it "tempC"
-        tempC = matches("temp|deg")
+        # Find whichever column contains "temp" and name it "tempC"
+        tempC = matches("temp")
+      ) %>%
+      mutate(
+        tempC = as.numeric(tempC),
+        # Convert Fahrenheit to Celsius where necessary
+        tempC = if (is_fahrenheit) {
+          (tempC - 32) * 5 / 9
+        } else {
+          tempC
+        }
       )
   }else { #column headers are missing
     # add headers manually
     df <- read_csv(file_path, col_names = c("date_time", "tempC"), show_col_types = FALSE)
   }
 
-  # Column Renaming based on keyword matching (grep style)
+  # parse date_time correctly
    df <- df %>% select(date_time, tempC) %>%
     mutate(
       # convert date_time to text first so lubridate can parse it consistently
@@ -127,7 +138,6 @@ read_and_standardize <- function(file_path) {
                                                           "%m/%d/%Y",
                                                           "%m/%d/%y"
                                                         )),
-      tempC = as.numeric(tempC)
     )
   return(df)
 }
@@ -252,9 +262,7 @@ temp_QC <- temp_data %>%
 
 View(temp_QC)
 
-missing_datetime = temp_data %>%
-  filter(is.na(date_time)) %>%
-  count(FileName) %>%
-  arrange(desc(n))
 
-write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v2.csv")
+#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v4.csv")
+
+
