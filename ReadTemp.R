@@ -23,6 +23,7 @@ sites <- read.csv("Temperature/sites_v02.csv",header=T)
 site_loc <-  st_as_sf(sites, coords = c("logger_lon","logger_lat"),crs = 4326)
 
 #Get Texas stream network and wshed
+# https://research.fs.usda.gov/rmrs/projects/national-stream-internet#download-data
 Tex_stream<-st_read("Stream/rmrs-flowline_tx12_nsi/Flowline_TX12_NSI.shp")
 
 #Get watershed polygons at different HUC levels
@@ -264,5 +265,7 @@ View(temp_QC)
 
 
 #write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v4.csv")
+
+
 
 

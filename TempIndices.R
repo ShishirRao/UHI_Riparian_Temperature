@@ -2,6 +2,7 @@ library(dplyr)
 library(lubridate)
 library(tidyr)
 library(slider)
+library(ggplot2)
 
 
 ##### start with daily indices #####
