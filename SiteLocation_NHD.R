@@ -9,6 +9,8 @@ SA_loggers_NHD <- st_join(
   left = TRUE
 )
 
+
+
 SA_loggers_NHD %>%
   st_drop_geometry() %>%
   summarise(
@@ -25,11 +27,18 @@ SA_loggers_NHD <- SA_loggers_NHD %>%
   mutate(
     original_comid_exists = COMID.x %in% nhd_comids,
     comid_match = COMID.x == COMID.y
-  )
+  ) %>%
+  select(FileName,project,loggerID,stream,COMID.x,COMID.y,original_comid_exists,comid_match)
 
 SA_loggers_NHD %>%
   st_drop_geometry() %>%
   count(original_comid_exists, comid_match)
+
+SA_loggers_NHD %>% slice(project == "SanFelipe") %>% unique(COMID.x)
+
+length(unique(sites$loggerID))
+
+#write.csv(SA_loggers_NHD,"E:/Shishir/postdoc/Data/Results/SA_loggers_NHD_COMID_v1.csv")
 
 
 #### let us get the BFI values ####
