@@ -19,6 +19,16 @@ setwd("E:/Shishir/postdoc/Data")
 #read the site level meta data for temperature loggers
 sites <- read.csv("Temperature/sites_v02.csv",header=T)
 
+sites %>%
+  group_by(loggerID) %>%
+  summarise(
+    n_files = n(),
+    n_locations = n_distinct(logger_lon, logger_lat),
+    .groups = "drop"
+  ) %>%
+  filter(n_locations > 1)
+
+
 #Create a shape file using the lat, long of logger locations
 site_loc <-  st_as_sf(sites, coords = c("logger_lon","logger_lat"),crs = 4326)
 
@@ -150,6 +160,41 @@ temp_data = existing_paths %>%
 #make sure all files are read
 length(unique(temp_data$FileName))
 
+##### combine temperature data with logger metadata to merge temperature records from different years #######
+
+# Select logger metadata
+logger_metadata <- SA_loggers %>%
+  st_drop_geometry() %>%
+  select(FileName, loggerID,project,stream,loggerType)
+
+# Check that each filename has only one metadata record
+logger_metadata %>%
+  count(FileName) %>%
+  filter(n > 1)
+
+# Join logger ID to temperature observations
+temp_data_joined <- temp_data %>%
+  left_join(
+    logger_metadata,
+    by = "FileName",
+    relationship = "many-to-one"
+  )
+
+#check if all files matched
+temp_data_joined %>%
+  filter(is.na(loggerID)) %>%
+  distinct(FileName)
+
+logger_temp_summary <- temp_data_joined %>%
+  group_by(loggerID) %>%
+  summarise(
+    n_files = n_distinct(FileName),
+    start_date = min(date_time, na.rm = TRUE),
+    end_date = max(date_time, na.rm = TRUE),
+    years_with_data = n_distinct(year(date_time)),
+    n_obs = sum(!is.na(tempC)),
+    .groups = "drop"
+  )
 
 ###### Read related USGS gauges #####
 
