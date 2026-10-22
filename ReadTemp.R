@@ -19,16 +19,6 @@ setwd("E:/Shishir/postdoc/Data")
 #read the site level meta data for temperature loggers
 sites <- read.csv("Temperature/sites_v02.csv",header=T)
 
-sites %>%
-  group_by(loggerID) %>%
-  summarise(
-    n_files = n(),
-    n_locations = n_distinct(logger_lon, logger_lat),
-    .groups = "drop"
-  ) %>%
-  filter(n_locations > 1)
-
-
 #Create a shape file using the lat, long of logger locations
 site_loc <-  st_as_sf(sites, coords = c("logger_lon","logger_lat"),crs = 4326)
 
@@ -160,12 +150,50 @@ temp_data = existing_paths %>%
 #make sure all files are read
 length(unique(temp_data$FileName))
 
-##### combine temperature data with logger metadata to merge temperature records from different years #######
+##### combine temperature data with logger metadata to merge temperature records from different years ######
 
-# Select logger metadata
+# same logger is used in multiple sites. loggerID is not a unique identifier
+sites %>%
+  group_by(loggerID) %>%
+  summarise(
+    n_files = n(),
+    n_locations = n_distinct(logger_lon, logger_lat),
+    .groups = "drop"
+  ) %>%
+  filter(n_locations > 1)
+
+# Check if station IDs are unique
+sites %>%
+  group_by(stationID) %>%
+  summarise(
+    n_files = n(),
+    n_locations = n_distinct(logger_lon, logger_lat),
+    .groups = "drop"
+  ) %>%
+  filter(n_locations > 1)
+
+station_check <- sites %>%
+  group_by(stationID) %>%
+  summarise(
+    n_files = n(),
+    n_loggers = n_distinct(loggerID),
+    n_locations = n_distinct(logger_lon, logger_lat),
+    n_COMIDs = n_distinct(COMID, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+station_check %>%
+  filter(n_locations > 1 | n_COMIDs > 1)
+
+
+# Yes, stations IDs are unique. Use stationID to combine logger records across different years
+
+length(unique(SA_loggers$stationID))
+
+# Select logger metadata attributes
 logger_metadata <- SA_loggers %>%
   st_drop_geometry() %>%
-  select(FileName, loggerID,project,stream,loggerType)
+  select(FileName,loggerID,project,stream,loggerType,stationID)
 
 # Check that each filename has only one metadata record
 logger_metadata %>%
@@ -178,15 +206,17 @@ temp_data_joined <- temp_data %>%
     logger_metadata,
     by = "FileName",
     relationship = "many-to-one"
-  )
+  )%>%
+  arrange(stationID, date_time)
 
 #check if all files matched
 temp_data_joined %>%
-  filter(is.na(loggerID)) %>%
+  filter(is.na(stationID)) %>%
   distinct(FileName)
 
-logger_temp_summary <- temp_data_joined %>%
-  group_by(loggerID) %>%
+# now summarize by station ID
+station_temp_summary <- temp_data_joined %>%
+  group_by(stationID) %>%
   summarise(
     n_files = n_distinct(FileName),
     start_date = min(date_time, na.rm = TRUE),
@@ -200,7 +230,7 @@ logger_temp_summary <- temp_data_joined %>%
 
 ###### perform quality checks on different sites' temperature data before generating indices #####
 
-# Step 1: Determine the sampling interval for each logger
+# Step 1: Determine the sampling interval for each file
 # Use the most common interval between consecutive timestamps
 
 logger_intervals <- temp_data %>%
@@ -231,7 +261,7 @@ daily_counts <- temp_data %>%
     .groups = "drop"
   )
 
-# Step 3: Create site-level quality-control summary
+# Step 3: Create file-level quality-control summary
 
 temp_QC <- temp_data %>%
   group_by(FileName) %>%
