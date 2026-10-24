@@ -69,7 +69,7 @@ full_paths <- file.path(folder_path, SA_temp_files)
 # Check if the paths of files actually exist in the folder
 existing_paths <- full_paths[file.exists(full_paths)]
 
-# 45 files are missing out of 191 sites
+# 2 files are missing. One of them is not necessary and the other needs to be downloaded from USGS
 missing_paths <- full_paths[!file.exists(full_paths)]
 missing_filenames <- basename(missing_paths)
 
@@ -188,7 +188,7 @@ station_check %>%
 
 # Yes, stations IDs are unique. Use stationID to combine logger records across different years
 
-length(unique(SA_loggers$stationID))
+length(unique(SA_loggers$stationID)) ## there are 95 unique stations
 
 # Select logger metadata attributes
 logger_metadata <- SA_loggers %>%
@@ -226,6 +226,10 @@ station_temp_summary <- temp_data_joined %>%
     .groups = "drop"
   )
 
+#station_temp_summary has 93 rows though
+
+
+
 ###### Read related USGS gauges #####
 
 ###### perform quality checks on different sites' temperature data before generating indices #####
@@ -233,29 +237,29 @@ station_temp_summary <- temp_data_joined %>%
 # Step 1: Determine the sampling interval for each file
 # Use the most common interval between consecutive timestamps
 
-logger_intervals <- temp_data %>%
+logger_intervals <- temp_data_joined %>%
   filter(!is.na(date_time)) %>%
-  distinct(FileName, date_time) %>%
-  arrange(FileName, date_time) %>%
-  group_by(FileName) %>%
+  distinct(stationID, date_time) %>%
+  arrange(stationID, date_time) %>%
+  group_by(stationID) %>%
   mutate(
     interval_min = as.numeric(
       difftime(date_time, lag(date_time), units = "mins")
     )
   ) %>%
   filter(!is.na(interval_min), interval_min > 0) %>%
-  count(FileName, interval_min, name = "frequency") %>%
-  arrange(FileName, desc(frequency), interval_min) %>%
-  group_by(FileName) %>%
+  count(stationID, interval_min, name = "frequency") %>%
+  arrange(stationID, desc(frequency), interval_min) %>%
+  group_by(stationID) %>%
   slice(1) %>%
   ungroup() %>%
-  select(FileName, sampling_interval_min = interval_min)
+  select(stationID, sampling_interval_min = interval_min)
 
 # Step 2: Calculate observations per day
-daily_counts <- temp_data %>%
+daily_counts <- temp_data_joined %>%
   filter(!is.na(date_time)) %>%
   mutate(date = as.Date(date_time)) %>%
-  group_by(FileName, date) %>%
+  group_by(stationID, date) %>%
   summarise(
     n_obs_day = sum(!is.na(tempC)),
     .groups = "drop"
@@ -263,8 +267,8 @@ daily_counts <- temp_data %>%
 
 # Step 3: Create file-level quality-control summary
 
-temp_QC <- temp_data %>%
-  group_by(FileName) %>%
+temp_QC <- temp_data_joined %>%
+  group_by(stationID) %>%
   summarise(
     start_date = if (all(is.na(date_time))) as.POSIXct(NA)
     else min(date_time, na.rm = TRUE),
@@ -309,10 +313,10 @@ temp_QC <- temp_data %>%
       as.Date(end_date) - as.Date(start_date)
     ) + 1
   ) %>%
-  left_join(logger_intervals, by = "FileName") %>%
+  left_join(logger_intervals, by = "stationID") %>%
   left_join(
     daily_counts %>%
-      group_by(FileName) %>%
+      group_by(stationID) %>%
       summarise(
         days_with_data = sum(n_obs_day > 0),
         median_obs_per_day = median(n_obs_day),
@@ -320,7 +324,7 @@ temp_QC <- temp_data %>%
         max_obs_per_day = max(n_obs_day),
         .groups = "drop"
       ),
-    by = "FileName"
+    by = "stationID"
   ) %>%
   mutate(
     expected_obs = as.numeric(
@@ -339,8 +343,72 @@ temp_QC <- temp_data %>%
 View(temp_QC)
 
 
-#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v4.csv")
+#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v5.csv")
 
+
+# tempQC with stationID as the merge variable shows substantial duplication of records
+overlapping_records <- temp_data_joined %>%
+  group_by(stationID, date_time) %>%
+  summarise(
+    n_records = n(),
+    n_files = n_distinct(FileName),
+    n_unique_temps = n_distinct(tempC),
+    .groups = "drop"
+  ) %>%
+  filter(n_files > 1)
+
+overlap_summary <- overlapping_records %>%
+  group_by(stationID) %>%
+  summarise(
+    n_overlapping_timestamps = n(),
+    n_conflicting_timestamps = sum(n_unique_temps > 1),
+    max_files_per_timestamp = max(n_files),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_overlapping_timestamps))
+
+View(overlap_summary)
+
+#write.csv(overlap_summary,"E:/Shishir/postdoc/Data/Results/overlap_summary_v1.csv")
+
+conflicts <- temp_data_joined %>%
+  filter(stationID == "Honey29") %>%
+  group_by(date_time) %>%
+  filter(
+    n_distinct(FileName) > 1,
+    n_distinct(tempC) > 1
+  ) %>%
+  ungroup() %>%
+  arrange(date_time)
+
+# Find the date range
+conflicts %>%
+  summarise(
+    start_date = min(date_time),
+    end_date = max(date_time),
+    n_conflicting_timestamps = n_distinct(date_time)
+  )
+
+
+library(dplyr)
+library(ggplot2)
+
+honey29 <- temp_data_joined %>%
+  filter(FileName %in% c(
+    "ID21321693_BT_Honey29_2022_08_16",
+    "ID21321693_BT_Honey29_2023_05_10",
+    "ID21321693_BT_Honey29_2024_11_11"
+  ))
+
+ggplot(honey29, aes(x = date_time, y = tempC, color = FileName)) +
+  geom_line(linewidth = 0.7, alpha = 0.8) +
+  labs(
+    title = "Honey29: Temperature Records Across Three Files",
+    x = "Date",
+    y = "Water temperature (°C)",
+    color = "Source file",
+  ) +
+  theme_minimal() + theme(legend.position = "bottom")+facet_wrap(FileName~.)
 
 
 
