@@ -230,15 +230,32 @@ station_temp_summary <- temp_data_joined %>%
 #station_temp_summary has 93 rows though
 
 
-
 ###### Read related USGS gauges #####
+
+### correct the cibolo data for duplicate time stamp issue ####
+# Shift timestamps for CiboloPreserveUp and CiboloPreserveDown 2022_07_28 files
+# forward by 21 days
+
+temp_data_corrected <- temp_data_joined %>%
+  mutate(
+    date_time_original = date_time,
+    date_time = if_else(
+      stationID %in% c(
+        "CiboloPreserveUp",
+        "CiboloPreserveDown"
+      ) & grepl("2022_07_28$", FileName),
+      date_time + days(21),
+      date_time
+    )
+  )
+
 
 ###### perform quality checks on different sites' temperature data before generating indices #####
 
 # Step 1: Determine the sampling interval for each file
 # Use the most common interval between consecutive timestamps
 
-logger_intervals <- temp_data_joined %>%
+logger_intervals <- temp_data_corrected %>%
   filter(!is.na(date_time)) %>%
   distinct(stationID, date_time) %>%
   arrange(stationID, date_time) %>%
@@ -257,7 +274,7 @@ logger_intervals <- temp_data_joined %>%
   select(stationID, sampling_interval_min = interval_min)
 
 # Step 2: Calculate observations per day
-daily_counts <- temp_data_joined %>%
+daily_counts <- temp_data_corrected %>%
   filter(!is.na(date_time)) %>%
   mutate(date = as.Date(date_time)) %>%
   group_by(stationID, date) %>%
@@ -268,7 +285,7 @@ daily_counts <- temp_data_joined %>%
 
 # Step 3: Create file-level quality-control summary
 
-temp_QC <- temp_data_joined %>%
+temp_QC <- temp_data_corrected %>%
   group_by(stationID) %>%
   summarise(
     start_date = if (all(is.na(date_time))) as.POSIXct(NA)
