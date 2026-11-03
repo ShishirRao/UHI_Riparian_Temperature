@@ -41,6 +41,8 @@ st_crs(SA_wshed) # this is in EPSG 4269
 site_loc <- st_transform(site_loc, st_crs(SA_wshed))
 SA_loggers <- st_filter(site_loc, SA_wshed, .predicate = st_intersects)
 
+
+
 #Clip the stream network to San Antonio watershed
 Tex_stream <- st_transform(Tex_stream,st_crs(SA_wshed))
 SA_stream <- st_filter(Tex_stream, SA_wshed, .predicate = st_intersects)
@@ -125,7 +127,7 @@ read_and_standardize <- function(file_path) {
   }
 
   # parse date_time correctly
-   df <- df %>% select(date_time, tempC) %>%
+   df <- df %>% dplyr::select(date_time, tempC) %>%
     mutate(
       # convert date_time to text first so lubridate can parse it consistently
       date_time = as.character(date_time),
@@ -194,7 +196,7 @@ length(unique(SA_loggers$stationID)) ## there are 95 unique stations
 # Select logger metadata attributes
 logger_metadata <- SA_loggers %>%
   st_drop_geometry() %>%
-  select(FileName,loggerID,project,stream,loggerType,stationID)
+  dplyr::select(FileName,loggerID,project,stream,loggerType,stationID)
 
 # Check that each filename has only one metadata record
 logger_metadata %>%
@@ -232,135 +234,14 @@ station_temp_summary <- temp_data_joined %>%
 
 ###### Read related USGS gauges #####
 
-### correct the cibolo data for duplicate time stamp issue ####
-# Shift timestamps for CiboloPreserveUp and CiboloPreserveDown 2022_07_28 files
-# forward by 21 days
 
-temp_data_corrected <- temp_data_joined %>%
-  mutate(
-    date_time_original = date_time,
-    date_time = if_else(
-      stationID %in% c(
-        "CiboloPreserveUp",
-        "CiboloPreserveDown"
-      ) & grepl("2022_07_28$", FileName),
-      date_time + days(21),
-      date_time
-    )
-  )
+### export shape file for gee ##
+# Create one point per station
+SA_loggers_GEE <- SA_loggers %>%
+  distinct(stationID, .keep_all = TRUE)
 
+# Export as shapefile
+#st_write( SA_loggers_GEE, "Temperature/SA_loggers_GEE.shp",delete_layer = TRUE)
 
-###### perform quality checks on different sites' temperature data before generating indices #####
-
-# Step 1: Determine the sampling interval for each file
-# Use the most common interval between consecutive timestamps
-
-logger_intervals <- temp_data_corrected %>%
-  filter(!is.na(date_time)) %>%
-  distinct(stationID, date_time) %>%
-  arrange(stationID, date_time) %>%
-  group_by(stationID) %>%
-  mutate(
-    interval_min = as.numeric(
-      difftime(date_time, lag(date_time), units = "mins")
-    )
-  ) %>%
-  filter(!is.na(interval_min), interval_min > 0) %>%
-  count(stationID, interval_min, name = "frequency") %>%
-  arrange(stationID, desc(frequency), interval_min) %>%
-  group_by(stationID) %>%
-  slice(1) %>%
-  ungroup() %>%
-  select(stationID, sampling_interval_min = interval_min)
-
-# Step 2: Calculate observations per day
-daily_counts <- temp_data_corrected %>%
-  filter(!is.na(date_time)) %>%
-  mutate(date = as.Date(date_time)) %>%
-  group_by(stationID, date) %>%
-  summarise(
-    n_obs_day = sum(!is.na(tempC)),
-    .groups = "drop"
-  )
-
-# Step 3: Create file-level quality-control summary
-
-temp_QC <- temp_data_corrected %>%
-  group_by(stationID) %>%
-  summarise(
-    start_date = if (all(is.na(date_time))) as.POSIXct(NA)
-    else min(date_time, na.rm = TRUE),
-
-    end_date = if (all(is.na(date_time))) as.POSIXct(NA)
-    else max(date_time, na.rm = TRUE),
-
-    start_year = if (all(is.na(date_time))) NA_integer_
-    else year(min(date_time, na.rm = TRUE)),
-
-    end_year = if (all(is.na(date_time))) NA_integer_
-    else year(max(date_time, na.rm = TRUE)),
-
-    years_with_data = n_distinct(
-      year(date_time[!is.na(date_time) & !is.na(tempC)])
-    ),
-
-    n_records = n(),
-
-    n_obs = sum(!is.na(tempC) & !is.na(date_time)),
-
-    missing_temp = sum(is.na(tempC)),
-
-    missing_datetime = sum(is.na(date_time)),
-
-    duplicate_timestamps = sum(
-      duplicated(date_time) & !is.na(date_time)
-    ),
-
-    min_temp = if (all(is.na(tempC))) NA_real_
-    else min(tempC, na.rm = TRUE),
-
-    max_temp = if (all(is.na(tempC))) NA_real_
-    else max(tempC, na.rm = TRUE),
-
-    .groups = "drop"
-  ) %>%
-  mutate(
-    years_spanned = end_year - start_year + 1,
-
-    days_spanned = as.numeric(
-      as.Date(end_date) - as.Date(start_date)
-    ) + 1
-  ) %>%
-  left_join(logger_intervals, by = "stationID") %>%
-  left_join(
-    daily_counts %>%
-      group_by(stationID) %>%
-      summarise(
-        days_with_data = sum(n_obs_day > 0),
-        median_obs_per_day = median(n_obs_day),
-        min_obs_per_day = min(n_obs_day),
-        max_obs_per_day = max(n_obs_day),
-        .groups = "drop"
-      ),
-    by = "stationID"
-  ) %>%
-  mutate(
-    expected_obs = as.numeric(
-      difftime(end_date, start_date, units = "mins")
-    ) / sampling_interval_min + 1,
-
-    completeness_pct = round(
-      100 * n_obs / expected_obs, 1
-    ),
-
-    days_completeness_pct = round(
-      100 * days_with_data / days_spanned, 1
-    )
-  )
-
-View(temp_QC)
-
-
-#write.csv(temp_QC,"E:/Shishir/postdoc/Data/Results/temp_QC_v5.csv")
 
 

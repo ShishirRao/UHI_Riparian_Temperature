@@ -8,7 +8,7 @@ library(ggplot2)
 ##### start with daily indices #####
 
 # Keep the original temperature dataset unchanged
-temp_indices_data <- temp_data %>%
+temp_indices_data <- temp_clean_15min %>%
   filter(!is.na(date_time)) %>%
   mutate(
     date = as.Date(date_time),
@@ -17,9 +17,10 @@ temp_indices_data <- temp_data %>%
   )
 
 
+
 # Sampling interval for each file
 sampling_info <- temp_QC %>%
-  select(FileName, sampling_interval_min)
+  dplyr::select(stationID, sampling_interval_min)
 
 # Function to identify US daylight-saving transition dates
 dst_dates <- function(yr) {
@@ -38,6 +39,7 @@ dst_dates <- function(yr) {
   )
 }
 
+
 # Identify spring and fall DST dates
 years <- sort(unique(temp_indices_data$year))
 
@@ -52,8 +54,8 @@ fall_dates <- as.Date(vapply(
 
 # Calculate daily indices
 daily_temp <- temp_indices_data %>%
-  left_join(sampling_info, by = "FileName") %>%
-  group_by(FileName, date) %>%
+  left_join(sampling_info, by = "stationID") %>%
+  group_by(stationID, date) %>%
   summarise(
     year = first(year),
     month = first(month),
@@ -74,7 +76,8 @@ daily_temp <- temp_indices_data %>%
     # Number of hours in each day
     hours_day = case_when(
       date %in% spring_dates ~ 23,
-      date %in% fall_dates ~ 25,
+      # this doesn't matter now because I removed the duplicate records
+      #date %in% fall_dates ~ 25,
       TRUE ~ 24
     ),
 
@@ -103,7 +106,7 @@ View(daily_temp)
 # Calculate 7-day rolling temperature indices
 
 rolling_temp <- daily_temp %>%
-  group_by(FileName) %>%
+  group_by(stationID) %>%
 
   # Fill missing dates to ensure consecutive 7-day windows
   complete(
@@ -178,7 +181,7 @@ seasonal_data <- daily_temp %>%
 
 # Summarise seasonal temperatures
 seasonal_temp <- seasonal_data %>%
-  group_by(FileName, season_year, season) %>%
+  group_by(stationID, season_year, season) %>%
   summarise(
     n_valid_days = sum(valid_day, na.rm = TRUE),
 
@@ -210,7 +213,7 @@ View(seasonal_temp)
 #### Annual temperature indices ####
 
 annual_temp <- daily_temp %>%
-  group_by(FileName, year) %>%
+  group_by(stationID, year) %>%
   summarise(
     n_valid_days = sum(valid_day, na.rm = TRUE),
 
@@ -242,7 +245,7 @@ annual_temp <- daily_temp %>%
 
 # Add maximum 7DADM for each year
 annual_7dadm <- rolling_temp %>%
-  group_by(FileName, year) %>%
+  group_by(stationID, year) %>%
   summarise(
     max_7DADM = if (all(is.na(DADM7))) NA_real_
     else max(DADM7, na.rm = TRUE),
@@ -250,7 +253,16 @@ annual_7dadm <- rolling_temp %>%
   )
 
 annual_temp <- annual_temp %>%
-  left_join(annual_7dadm, by = c("FileName", "year"))
+  left_join(annual_7dadm, by = c("stationID", "year"))
+
+annual_temp <- annual_temp %>%
+  mutate(
+    expected_days = if_else(
+      leap_year(year), 366L, 365L
+    ),
+    annual_completeness_pct =
+      round(100 * n_valid_days / expected_days, 2)
+  )
 
 View(annual_temp)
 
@@ -278,7 +290,7 @@ daily_temp <- daily_temp %>%
 
 # Summarise by year
 annual_thresholds <- daily_temp %>%
-  group_by(FileName, year) %>%
+  group_by(stationID, year) %>%
   summarise(
     degree_days_above_30 = if (all(is.na(degree_days_above_30)))
       NA_real_
@@ -293,10 +305,10 @@ annual_thresholds <- daily_temp %>%
 #### plotting a logger's temperature #####
 
 
-example_logger <- unique(daily_temp$FileName)[1]
+example_logger <- unique(daily_temp$stationID)[1]
 
 daily_temp %>%
-  filter(FileName == example_logger) %>%
+  filter(stationID == example_logger) %>%
   ggplot(aes(x = date)) +
   geom_ribbon(
     aes(ymin = min_temp, ymax = max_temp),
